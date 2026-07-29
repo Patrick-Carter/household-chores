@@ -1,0 +1,28 @@
+services:
+  app:
+    image: ghcr.io/patrick-carter/household-chores:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: household-chores
+    restart: unless-stopped
+    ports:
+      # Uses 3001 on the host so Gridiron Heads can continue using 3000.
+      - "${HOST_PORT:-3001}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DB_PATH: /app/data/chores.db
+      HOUSEHOLD_PASSWORD: "${HOUSEHOLD_PASSWORD:-carterhub}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-adminhub}"
+      HOUSEHOLD_TIMEZONE: "${HOUSEHOLD_TIMEZONE:-America/Chicago}"
+      SESSION_DAYS: "${SESSION_DAYS:-30}"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3001}"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

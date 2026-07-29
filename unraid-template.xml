@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>household-chores</Name>
+  <Repository>ghcr.io/patrick-carter/household-chores</Repository>
+  <Registry>ghcr.io</Registry>
+  <Tag>latest</Tag>
+  <HubURL>https://github.com/patrick-carter/household-chores</HubURL>
+  <Description>Shared household chore scheduling, completion, flagging, and workload tracking.</Description>
+  <Category>Productivity:</Category>
+  <Maintainer>patrick-carter</Maintainer>
+  <Support>https://github.com/patrick-carter/household-chores/issues</Support>
+  <Project>https://github.com/patrick-carter/household-chores</Project>
+
+  <Networking>
+    <Mode>bridge</Mode>
+    <Ports>
+      <Port>
+        <HostPort>3001</HostPort>
+        <ContainerPort>3000</ContainerPort>
+        <Protocol>tcp</Protocol>
+        <Label>House Ledger Web UI</Label>
+      </Port>
+    </Ports>
+  </Networking>
+
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/household-chores/data</HostDir>
+      <ContainerDir>/app/data</ContainerDir>
+      <Mode>rw</Mode>
+      <Description>Persistent SQLite database</Description>
+    </Volume>
+  </Data>
+
+  <Config Name="Household Password" Target="HOUSEHOLD_PASSWORD" Default="carterhub" Mode="" Description="Shared password for household members" Type="Variable" Required="True" Mask="True" />
+  <Config Name="Admin Password" Target="ADMIN_PASSWORD" Default="adminhub" Mode="" Description="Password for the administration console" Type="Variable" Required="True" Mask="True" />
+  <Config Name="Household Timezone" Target="HOUSEHOLD_TIMEZONE" Default="America/Chicago" Mode="" Description="IANA timezone used for daily, weekly, and monthly periods" Type="Variable" Required="True" />
+  <Config Name="Session Length" Target="SESSION_DAYS" Default="30" Mode="" Description="Days before a signed-in browser must enter the password again" Type="Variable" Required="False" />
+  <Config Name="Allowed Browser Origins" Target="ALLOWED_ORIGINS" Default="http://localhost:3001" Mode="" Description="Comma-separated extra origins for cross-origin API access" Type="Variable" Required="False" />
+  <Config Name="Database Path" Target="DB_PATH" Default="/app/data/chores.db" Mode="" Description="SQLite path inside the container" Type="Variable" Required="False" />
+
+  <Privileged>false</Privileged>
+  <ReadOnly>false</ReadOnly>
+  <NoAutoUpdate>true</NoAutoUpdate>
+  <Restart>unless-stopped</Restart>
+  <HealthCheck><Type>image</Type></HealthCheck>
+  <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+</Container>
