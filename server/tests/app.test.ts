@@ -82,6 +82,137 @@ describe('chores API', () => {
       .expect(201);
   });
 
+  it('keeps as-needed chores open while recording each completion', async () => {
+    const patrick = await login('carterhub', 1);
+    const claim = await request(app)
+      .post('/api/occurrences')
+      .set('Authorization', `Bearer ${patrick}`)
+      .send({ choreId: 14 });
+
+    await request(app)
+      .post(`/api/occurrences/${claim.body.id}/complete`)
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(204);
+
+    const firstBootstrap = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(200);
+    const firstOccurrence = firstBootstrap.body.occurrences[0];
+    expect(firstOccurrence).toMatchObject({
+      choreId: 14,
+      status: 'claimed',
+      completedAt: expect.any(String),
+    });
+    expect(firstOccurrence.periodKey).toMatch(/^A:/);
+
+    await request(app)
+      .post(`/api/occurrences/${claim.body.id}/complete`)
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(204);
+
+    const secondBootstrap = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(200);
+    const secondOccurrence = secondBootstrap.body.occurrences[0];
+    expect(secondOccurrence).toMatchObject({ choreId: 14, status: 'claimed' });
+    expect(secondOccurrence.periodKey).not.toBe(firstOccurrence.periodKey);
+
+    const completionCount = db.prepare(
+      'SELECT COUNT(*) AS count FROM completions WHERE assignment_id = ?',
+    ).get(claim.body.id) as { count: number };
+    expect(completionCount.count).toBe(2);
+  });
+
+  it('lets other household members toggle hearts on individual completions', async () => {
+    const patrick = await login('carterhub', 1);
+    const claim = await request(app)
+      .post('/api/occurrences')
+      .set('Authorization', `Bearer ${patrick}`)
+      .send({ choreId: 14 });
+    await request(app)
+      .post(`/api/occurrences/${claim.body.id}/complete`)
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(204);
+
+    const firstBootstrap = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(200);
+    const firstCompletionId = firstBootstrap.body.occurrences[0].completionId as number;
+    expect(firstCompletionId).toEqual(expect.any(Number));
+    expect(firstBootstrap.body.hearts).toEqual([]);
+
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .expect(401);
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(403);
+
+    const admin = await login('adminhub');
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${admin}`)
+      .expect(403);
+
+    const nelly = await login('carterhub', 2);
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${nelly}`)
+      .expect(201);
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${nelly}`)
+      .expect(409);
+
+    const nancy = await login('carterhub', 3);
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${nancy}`)
+      .expect(201);
+
+    const withHearts = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(200);
+    expect(withHearts.body.hearts).toEqual([
+      expect.objectContaining({ completionId: firstCompletionId, giverUserId: 2 }),
+      expect.objectContaining({ completionId: firstCompletionId, giverUserId: 3 }),
+    ]);
+
+    await request(app)
+      .delete(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${nelly}`)
+      .expect(204);
+    expect((db.prepare(`
+      SELECT giver_user_id AS giverUserId FROM completion_hearts WHERE completion_id = ?
+    `).all(firstCompletionId) as Array<{ giverUserId: number }>)).toEqual([{ giverUserId: 3 }]);
+
+    await request(app)
+      .post(`/api/occurrences/${claim.body.id}/complete`)
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(204);
+    const secondBootstrap = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${patrick}`)
+      .expect(200);
+    expect(secondBootstrap.body.occurrences[0].completionId).not.toBe(firstCompletionId);
+    expect(secondBootstrap.body.hearts).toEqual([]);
+    await request(app)
+      .post(`/api/completions/${firstCompletionId}/hearts`)
+      .set('Authorization', `Bearer ${nelly}`)
+      .expect(404);
+
+    db.prepare('UPDATE users SET active = 0 WHERE id = 3').run();
+    await request(app)
+      .post(`/api/completions/${secondBootstrap.body.occurrences[0].completionId}/hearts`)
+      .set('Authorization', `Bearer ${nancy}`)
+      .expect(403);
+  });
+
   it('allows another user to flag completed work and an admin to resolve it', async () => {
     const patrick = await login('carterhub', 1);
     const claim = await request(app)
@@ -100,6 +231,13 @@ describe('chores API', () => {
     expect(ownFlag.status).toBe(403);
 
     const nelly = await login('carterhub', 2);
+    const completion = db.prepare(
+      'SELECT id FROM completions WHERE assignment_id = ?',
+    ).get(claim.body.id) as { id: number };
+    await request(app)
+      .post(`/api/completions/${completion.id}/hearts`)
+      .set('Authorization', `Bearer ${nelly}`)
+      .expect(201);
     await request(app)
       .post(`/api/occurrences/${claim.body.id}/flags`)
       .set('Authorization', `Bearer ${nelly}`)
@@ -117,6 +255,10 @@ describe('chores API', () => {
       'SELECT COUNT(*) AS count FROM completions WHERE assignment_id = ?',
     ).get(claim.body.id) as { count: number };
     expect(completionCount.count).toBe(0);
+    const heartCount = db.prepare(
+      'SELECT COUNT(*) AS count FROM completion_hearts WHERE completion_id = ?',
+    ).get(completion.id) as { count: number };
+    expect(heartCount.count).toBe(0);
   });
 
   it('requires cadence-specific schedules and lets an admin remove an assignment', async () => {

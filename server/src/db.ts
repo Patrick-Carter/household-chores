@@ -132,6 +132,13 @@ export function initDb(path = ':memory:'): AppDatabase {
       UNIQUE(assignment_id, period_key)
     );
 
+    CREATE TABLE IF NOT EXISTS completion_hearts (
+      completion_id INTEGER NOT NULL REFERENCES completions(id) ON DELETE CASCADE,
+      giver_user_id INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (completion_id, giver_user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS assignment_flags (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       assignment_id INTEGER NOT NULL REFERENCES assignments(id),

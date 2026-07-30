@@ -31,17 +31,26 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
   const [flagComment, setFlagComment] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [completedAsNeeded, setCompletedAsNeeded] = useState<Set<number>>(() => new Set());
 
   const actorId = data.actor.userId!;
   const userById = new Map(data.users.map((user) => [user.id, user]));
   const roomById = new Map(data.rooms.map((room) => [room.id, room]));
   const choreById = new Map(data.chores.map((chore) => [chore.id, chore]));
+  const occurrences = data.occurrences.map((item): ChoreOccurrence => completedAsNeeded.has(item.id)
+    ? { ...item, status: 'completed' }
+    : item);
   const openFlags = data.flags.filter((flag) => flag.status === 'open');
-  const myOpen = data.occurrences.filter((item) => item.userId === actorId);
+  const myOpen = occurrences.filter((item) => item.userId === actorId);
   const myMinutes = data.workload.find((item) => item.userId === actorId)?.minutes ?? 0;
-  const completedThisWeek = data.occurrences.filter((item) =>
+  const completedThisWeek = occurrences.filter((item) =>
     item.userId === actorId && item.completedAt && Date.parse(item.completedAt) > Date.now() - 7 * 86_400_000,
   ).length;
+
+  function changeView(nextView: View) {
+    if (nextView !== view) setCompletedAsNeeded(new Set());
+    setView(nextView);
+  }
 
   function openClaim(chore: Chore) {
     const now = new Date();
@@ -86,6 +95,36 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
     }
   }
 
+  async function complete(item: ChoreOccurrence) {
+    setBusy(true);
+    setError('');
+    try {
+      await mutate(`/api/occurrences/${item.id}/complete`, 'POST');
+      await refresh();
+      if (choreById.get(item.choreId)?.recurrence === 'as_needed') {
+        setCompletedAsNeeded((current) => new Set(current).add(item.id));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to update chore');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function heartsFor(item: ChoreOccurrence) {
+    return item.completionId === null
+      ? []
+      : data.hearts.filter((heart) => heart.completionId === item.completionId);
+  }
+
+  function heartNames(item: ChoreOccurrence): string[] {
+    return heartsFor(item).map((heart) => userById.get(heart.giverUserId)?.name ?? 'Unknown');
+  }
+
+  function hasMyHeart(item: ChoreOccurrence): boolean {
+    return heartsFor(item).some((heart) => heart.giverUserId === actorId);
+  }
+
   async function submitFlag(event: FormEvent) {
     event.preventDefault();
     if (!flagOccurrence) return;
@@ -115,10 +154,10 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
 
   const filteredChores = data.chores.filter((chore) => chore.active && chore.recurrence === recurrence);
   const activeRooms = data.rooms.filter((room) => room.active && filteredChores.some((chore) => chore.roomId === room.id));
-  const mySchedule = data.occurrences
+  const mySchedule = occurrences
     .filter((item) => item.userId === actorId)
     .sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
-  const householdSchedule = [...data.occurrences]
+  const householdSchedule = [...occurrences]
     .sort((a, b) => Date.parse(b.scheduledFor) - Date.parse(a.scheduledFor));
 
   return (
@@ -158,9 +197,9 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
         {error && !claimChore && !flagOccurrence && <div className="notice error-notice" role="alert">{error}</div>}
 
         <nav className="section-nav" aria-label="Chore views">
-          <button className={view === 'board' ? 'active' : ''} onClick={() => setView('board')}>Chore board</button>
-          <button className={view === 'mine' ? 'active' : ''} onClick={() => setView('mine')}>My commitments <span>{myOpen.length}</span></button>
-          <button className={view === 'household' ? 'active' : ''} onClick={() => setView('household')}>Household log</button>
+          <button className={view === 'board' ? 'active' : ''} onClick={() => changeView('board')}>Chore board</button>
+          <button className={view === 'mine' ? 'active' : ''} onClick={() => changeView('mine')}>My commitments <span>{myOpen.length}</span></button>
+          <button className={view === 'household' ? 'active' : ''} onClick={() => changeView('household')}>Household log</button>
         </nav>
 
         {view === 'board' && (
@@ -183,7 +222,7 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
                   <header><h3>{room.name}</h3><span>{filteredChores.filter((chore) => chore.roomId === room.id).length} tasks</span></header>
                   <div className="chore-grid">
                     {filteredChores.filter((chore) => chore.roomId === room.id).map((chore) => {
-                      const claims = data.occurrences
+                      const claims = occurrences
                         .filter((item) => item.choreId === chore.id)
                         .sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
                       const nextClaim = claims[0];
@@ -240,10 +279,11 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
                     userName={data.actor.name}
                     timezone={data.householdTimezone}
                     flags={data.flags.filter((flag) => flag.occurrenceId === item.id).length}
+                    heartNames={heartNames(item)}
                     actions={(
                       <div className="row-actions">
-                        {(item.status === 'claimed' || choreById.get(item.choreId)?.recurrence === 'as_needed') && (
-                          <button className="small-button primary" disabled={busy} onClick={() => action(`/api/occurrences/${item.id}/complete`, 'POST')}>Mark complete</button>
+                        {item.status === 'claimed' && (
+                          <button className="small-button primary" disabled={busy} onClick={() => complete(item)}>Mark complete</button>
                         )}
                         <button className="small-button" disabled={busy} onClick={() => action(`/api/occurrences/${item.id}`, 'DELETE')}>Release</button>
                       </div>
@@ -259,24 +299,44 @@ export function HouseholdApp({ data, refresh, logout }: HouseholdAppProps) {
           <section>
             <div className="section-heading">
               <div><p className="eyebrow">Shared record</p><h2>Household log</h2></div>
-              <p>Overdue or completed work can be flagged with a reason.</p>
+              <p>Heart completed work to show appreciation, or flag work that needs attention.</p>
             </div>
             {householdSchedule.length === 0 ? <EmptyState text="No one has claimed a chore yet." /> : (
               <div className="schedule-list">
-                {householdSchedule.map((item) => (
-                  <ScheduleRow
-                    key={item.id}
-                    item={item}
-                    chore={choreById.get(item.choreId)}
-                    roomName={roomById.get(choreById.get(item.choreId)?.roomId ?? 0)?.name}
-                    userName={userById.get(item.userId)?.name ?? 'Unknown'}
-                    timezone={data.householdTimezone}
-                    flags={data.flags.filter((flag) => flag.occurrenceId === item.id).length}
-                    actions={canFlag(item) ? (
-                      <button className="small-button flag" onClick={() => { setFlagOccurrence(item); setError(''); }}>Flag chore</button>
-                    ) : undefined}
-                  />
-                ))}
+                {householdSchedule.map((item) => {
+                  const hearted = hasMyHeart(item);
+                  const canHeart = item.completionId !== null && item.userId !== actorId;
+                  const flaggable = canFlag(item);
+                  return (
+                    <ScheduleRow
+                      key={item.id}
+                      item={item}
+                      chore={choreById.get(item.choreId)}
+                      roomName={roomById.get(choreById.get(item.choreId)?.roomId ?? 0)?.name}
+                      userName={userById.get(item.userId)?.name ?? 'Unknown'}
+                      timezone={data.householdTimezone}
+                      flags={data.flags.filter((flag) => flag.occurrenceId === item.id).length}
+                      heartNames={heartNames(item)}
+                      actions={canHeart || flaggable ? (
+                        <div className="row-actions">
+                          {canHeart && (
+                            <button
+                              className={`small-button heart${hearted ? ' active' : ''}`}
+                              disabled={busy}
+                              aria-pressed={hearted}
+                              onClick={() => action(`/api/completions/${item.completionId}/hearts`, hearted ? 'DELETE' : 'POST')}
+                            >
+                              {hearted ? '♥ Hearted' : '♡ Heart'}
+                            </button>
+                          )}
+                          {flaggable && (
+                            <button className="small-button flag" onClick={() => { setFlagOccurrence(item); setError(''); }}>Flag chore</button>
+                          )}
+                        </div>
+                      ) : undefined}
+                    />
+                  );
+                })}
               </div>
             )}
           </section>
@@ -324,10 +384,11 @@ interface ScheduleRowProps {
   userName: string;
   timezone: string;
   flags: number;
+  heartNames: string[];
   actions?: React.ReactNode;
 }
 
-function ScheduleRow({ item, chore, roomName, userName, timezone, flags, actions }: ScheduleRowProps) {
+function ScheduleRow({ item, chore, roomName, userName, timezone, flags, heartNames, actions }: ScheduleRowProps) {
   const asNeeded = chore?.recurrence === 'as_needed';
   const overdue = !asNeeded && item.status === 'claimed' && Date.parse(item.scheduledFor) < Date.now();
   return (
@@ -341,7 +402,11 @@ function ScheduleRow({ item, chore, roomName, userName, timezone, flags, actions
       <div className="schedule-main">
         <div className="schedule-title"><h3>{chore?.title ?? 'Archived chore'}</h3><span className={overdue ? 'status overdue' : `status ${item.status}`}>{overdue ? 'Overdue' : item.status === 'completed' ? 'Complete' : 'Assigned'}</span></div>
         <p>{roomName} · {chore ? scheduleLabel(chore, item) : formatDateTime(item.scheduledFor, timezone)} · {chore ? formatMinutes(chore.estimatedMinutes) : ''}</p>
-        <div className="assignee"><span className="avatar small">{initials(userName)}</span>{userName}{flags > 0 && <span className="flag-count">{flags} {flags === 1 ? 'flag' : 'flags'}</span>}</div>
+        <div className="assignee">
+          <span className="avatar small">{initials(userName)}</span>{userName}
+          {heartNames.length > 0 && <span className="heart-count">♥ {heartNames.length} · {heartNames.join(', ')}</span>}
+          {flags > 0 && <span className="flag-count">{flags} {flags === 1 ? 'flag' : 'flags'}</span>}
+        </div>
       </div>
       {actions && <div className="schedule-actions">{actions}</div>}
     </article>

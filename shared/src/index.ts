@@ -28,6 +28,7 @@ export interface Chore {
 
 export interface ChoreOccurrence {
   id: number;
+  completionId: number | null;
   choreId: number;
   userId: number;
   scheduledFor: string;
@@ -38,6 +39,12 @@ export interface ChoreOccurrence {
   status: OccurrenceStatus;
   claimedAt: string;
   completedAt: string | null;
+}
+
+export interface CompletionHeart {
+  completionId: number;
+  giverUserId: number;
+  createdAt: string;
 }
 
 export interface ChoreFlag {
@@ -73,6 +80,7 @@ export interface BootstrapData {
   rooms: Room[];
   chores: Chore[];
   occurrences: ChoreOccurrence[];
+  hearts: CompletionHeart[];
   flags: ChoreFlag[];
   workload: WorkloadShare[];
 }

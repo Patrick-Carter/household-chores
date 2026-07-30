@@ -10,6 +10,7 @@ import type {
   Chore,
   ChoreFlag,
   ChoreOccurrence,
+  CompletionHeart,
   HouseholdUser,
   Recurrence,
   Room,
@@ -101,11 +102,11 @@ function assignmentRows(db: AppDatabase): AssignmentRow[] {
 
 function occurrences(db: AppDatabase, config: AppConfig): ChoreOccurrence[] {
   const completionFor = db.prepare(`
-    SELECT period_key AS periodKey, completed_at AS completedAt
+    SELECT id AS completionId, period_key AS periodKey, completed_at AS completedAt
     FROM completions WHERE assignment_id = ? AND period_key = ?
   `);
   const latestCompletion = db.prepare(`
-    SELECT period_key AS periodKey, completed_at AS completedAt
+    SELECT id AS completionId, period_key AS periodKey, completed_at AS completedAt
     FROM completions WHERE assignment_id = ? ORDER BY id DESC LIMIT 1
   `);
   const now = new Date();
@@ -113,13 +114,14 @@ function occurrences(db: AppDatabase, config: AppConfig): ChoreOccurrence[] {
   return assignmentRows(db).map((assignment): ChoreOccurrence => {
     if (assignment.recurrence === 'as_needed') {
       const completion = latestCompletion.get(assignment.id) as
-        | { periodKey: string; completedAt: string }
+        | { completionId: number; periodKey: string; completedAt: string }
         | undefined;
       return {
         ...assignment,
+        completionId: completion?.completionId ?? null,
         scheduledFor: assignment.claimedAt,
         periodKey: completion?.periodKey ?? `A:pending:${assignment.id}`,
-        status: completion ? 'completed' : 'claimed',
+        status: 'claimed',
         completedAt: completion?.completedAt ?? null,
       };
     }
@@ -134,16 +136,28 @@ function occurrences(db: AppDatabase, config: AppConfig): ChoreOccurrence[] {
       config.householdTimezone,
     );
     const completion = completionFor.get(assignment.id, schedule.periodKey) as
-      | { periodKey: string; completedAt: string }
+      | { completionId: number; periodKey: string; completedAt: string }
       | undefined;
     return {
       ...assignment,
+      completionId: completion?.completionId ?? null,
       scheduledFor: schedule.dueAt.toISOString(),
       periodKey: schedule.periodKey,
       status: completion ? 'completed' : 'claimed',
       completedAt: completion?.completedAt ?? null,
     };
   }).sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
+}
+
+function hearts(db: AppDatabase, completionIds: number[]): CompletionHeart[] {
+  if (completionIds.length === 0) return [];
+  return db.prepare(`
+    SELECT completion_id AS completionId, giver_user_id AS giverUserId,
+           created_at AS createdAt
+    FROM completion_hearts
+    WHERE completion_id IN (${completionIds.map(() => '?').join(', ')})
+    ORDER BY created_at ASC, giver_user_id ASC
+  `).all(...completionIds) as CompletionHeart[];
 }
 
 function flags(db: AppDatabase): ChoreFlag[] {
@@ -178,13 +192,16 @@ function workload(db: AppDatabase): WorkloadShare[] {
 }
 
 function bootstrap(db: AppDatabase, config: AppConfig, req: Request): BootstrapData {
+  const occurrenceList = occurrences(db, config);
+  const completionIds = occurrenceList.flatMap((item) => item.completionId === null ? [] : [item.completionId]);
   return {
     actor: req.actor!,
     householdTimezone: config.householdTimezone,
     users: users(db),
     rooms: rooms(db),
     chores: chores(db),
-    occurrences: occurrences(db, config),
+    occurrences: occurrenceList,
+    hearts: hearts(db, completionIds),
     flags: flags(db),
     workload: workload(db),
   };
@@ -359,6 +376,70 @@ export function createApp(options: CreateAppOptions = {}) {
     db.prepare(`
       INSERT INTO completions (assignment_id, period_key, completed_at) VALUES (?, ?, ?)
     `).run(id, completionPeriod, new Date().toISOString());
+    res.status(204).end();
+  });
+
+  app.post('/api/completions/:id/hearts', authenticate, (req, res) => {
+    if (req.actor!.role !== 'household' || !req.actor!.userId) {
+      res.status(403).json({ error: 'Only household members can heart completed chores' });
+      return;
+    }
+    const activeActor = db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(req.actor!.userId);
+    if (!activeActor) {
+      res.status(403).json({ error: 'Only active household members can heart completed chores' });
+      return;
+    }
+    const id = positiveId(req.params.id);
+    const occurrence = id
+      ? occurrences(db, config).find((item) => item.completionId === id)
+      : undefined;
+    if (!occurrence) {
+      res.status(404).json({ error: 'Completion not found' });
+      return;
+    }
+    if (occurrence.userId === req.actor!.userId) {
+      res.status(403).json({ error: 'Another household member must give the heart' });
+      return;
+    }
+    try {
+      db.prepare(`
+        INSERT INTO completion_hearts (completion_id, giver_user_id) VALUES (?, ?)
+      `).run(id, req.actor!.userId);
+      res.status(201).json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) {
+        res.status(409).json({ error: 'You have already hearted this completion' });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.delete('/api/completions/:id/hearts', authenticate, (req, res) => {
+    if (req.actor!.role !== 'household' || !req.actor!.userId) {
+      res.status(403).json({ error: 'Only household members can remove hearts' });
+      return;
+    }
+    const activeActor = db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(req.actor!.userId);
+    if (!activeActor) {
+      res.status(403).json({ error: 'Only active household members can remove hearts' });
+      return;
+    }
+    const id = positiveId(req.params.id);
+    const occurrence = id
+      ? occurrences(db, config).find((item) => item.completionId === id)
+      : undefined;
+    if (!occurrence) {
+      res.status(404).json({ error: 'Completion not found' });
+      return;
+    }
+    if (occurrence.userId === req.actor!.userId) {
+      res.status(403).json({ error: 'Another household member must remove the heart' });
+      return;
+    }
+    db.prepare(`
+      DELETE FROM completion_hearts WHERE completion_id = ? AND giver_user_id = ?
+    `).run(id, req.actor!.userId);
     res.status(204).end();
   });
 
