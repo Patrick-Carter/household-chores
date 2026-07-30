@@ -41,6 +41,25 @@ describe('chores API', () => {
     expect(denied.status).toBe(401);
   });
 
+  it('lets an administrator rename a chore and update its time estimate', async () => {
+    const admin = await login('adminhub');
+    await request(app)
+      .patch('/api/admin/chores/1')
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ title: 'Wipe kitchen counters', estimatedMinutes: 20 })
+      .expect(204);
+
+    const bootstrap = await request(app)
+      .get('/api/bootstrap')
+      .set('Authorization', `Bearer ${admin}`)
+      .expect(200);
+    expect(bootstrap.body.chores.find((chore: { id: number }) => chore.id === 1)).toMatchObject({
+      title: 'Wipe kitchen counters',
+      estimatedMinutes: 20,
+      active: true,
+    });
+  });
+
   it('keeps a chore assigned until it is explicitly released', async () => {
     const patrick = await login('carterhub', 1);
     const first = await request(app)

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { RECURRENCE_LABELS, type BootstrapData, type ChoreFlag, type Recurrence } from '@chores/shared';
+import { RECURRENCE_LABELS, type BootstrapData, type Chore, type ChoreFlag, type Recurrence } from '@chores/shared';
 import { Header } from './components/Header';
 import { Modal } from './components/Modal';
 import { mutate } from './lib/api';
@@ -21,6 +21,7 @@ export function AdminApp({ data, refresh, logout }: AdminAppProps) {
   const [choreRoomId, setChoreRoomId] = useState(data.rooms.find((room) => room.active)?.id ?? 0);
   const [minutes, setMinutes] = useState(15);
   const [recurrence, setRecurrence] = useState<Recurrence>('daily');
+  const [editingChore, setEditingChore] = useState<Chore | null>(null);
   const [resolvingFlag, setResolvingFlag] = useState<ChoreFlag | null>(null);
   const [resolution, setResolution] = useState('');
   const [reopen, setReopen] = useState(false);
@@ -71,6 +72,15 @@ export function AdminApp({ data, refresh, logout }: AdminAppProps) {
     });
   }
 
+  function updateChore(event: FormEvent) {
+    event.preventDefault();
+    if (!editingChore) return;
+    void run(`/api/admin/chores/${editingChore.id}`, 'PATCH', {
+      title: editingChore.title,
+      estimatedMinutes: editingChore.estimatedMinutes,
+    }, () => setEditingChore(null));
+  }
+
   function submitResolution(event: FormEvent) {
     event.preventDefault();
     if (!resolvingFlag) return;
@@ -90,7 +100,7 @@ export function AdminApp({ data, refresh, logout }: AdminAppProps) {
           <div className="admin-seal">ADMIN<br /><span>CARTER HOUSE</span></div>
         </section>
 
-        {error && !resolvingFlag && <div className="notice error-notice" role="alert">{error}</div>}
+        {error && !editingChore && !resolvingFlag && <div className="notice error-notice" role="alert">{error}</div>}
 
         <nav className="section-nav admin-nav" aria-label="Admin views">
           <button className={view === 'overview' ? 'active' : ''} onClick={() => setView('overview')}>Overview</button>
@@ -223,7 +233,12 @@ export function AdminApp({ data, refresh, logout }: AdminAppProps) {
                       <td>{RECURRENCE_LABELS[chore.recurrence]}</td>
                       <td>{formatMinutes(chore.estimatedMinutes)}</td>
                       <td><span className={`status ${chore.active ? 'completed' : 'disabled'}`}>{chore.active ? 'Active' : 'Disabled'}</span></td>
-                      <td><button className="small-button" disabled={busy} onClick={() => run(`/api/admin/chores/${chore.id}`, 'PATCH', { active: !chore.active })}>{chore.active ? 'Disable' : 'Enable'}</button></td>
+                      <td>
+                        <div className="table-actions">
+                          <button className="small-button" disabled={busy} onClick={() => { setEditingChore({ ...chore }); setError(''); }}>Edit</button>
+                          <button className="small-button" disabled={busy} onClick={() => run(`/api/admin/chores/${chore.id}`, 'PATCH', { active: !chore.active })}>{chore.active ? 'Disable' : 'Enable'}</button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -232,6 +247,18 @@ export function AdminApp({ data, refresh, logout }: AdminAppProps) {
           </ManagementSection>
         )}
       </main>
+
+      {editingChore && (
+        <Modal title="Edit chore" eyebrow="Chore library" onClose={() => setEditingChore(null)}>
+          <p className="modal-intro">Update the name and time estimate shown to everyone in the household.</p>
+          <form className="stack-form" onSubmit={updateChore}>
+            <label>Chore name<input value={editingChore.title} onChange={(event) => setEditingChore({ ...editingChore, title: event.target.value })} maxLength={120} required autoFocus /></label>
+            <label>Minutes<input type="number" min={1} max={1440} value={editingChore.estimatedMinutes} onChange={(event) => setEditingChore({ ...editingChore, estimatedMinutes: Number(event.target.value) })} required /></label>
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <button className="primary-button full" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+          </form>
+        </Modal>
+      )}
 
       {resolvingFlag && (
         <Modal title="Resolve household flag" eyebrow="Admin review" onClose={() => setResolvingFlag(null)}>

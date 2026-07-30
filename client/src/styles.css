@@ -259,6 +259,7 @@ textarea { resize: vertical; }
 .chore-table td { padding: 12px; border-bottom: 1px solid #ddd6c9; }
 .chore-table td:first-child { min-width: 230px; }
 .chore-table td:last-child { text-align: right; }
+.table-actions { display: flex; justify-content: flex-end; gap: 7px; }
 
 @media (max-width: 900px) {
   .login-shell { grid-template-columns: 1fr; }
